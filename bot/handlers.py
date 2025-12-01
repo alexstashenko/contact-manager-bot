@@ -30,6 +30,24 @@ class ContactHandlers:
             return ''
         return escape_markdown(str(value), version=1)
     
+    @staticmethod
+    def _validate_email(email: str) -> bool:
+        """Проверка корректности email"""
+        if not email:
+            return True  # Пустой email допустим
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(pattern, email.strip()))
+    
+    @staticmethod
+    def _validate_telegram(username: str) -> bool:
+        """Проверка корректности telegram username"""
+        if not username:
+            return True  # Пустой username допустим
+        username = username.strip()
+        # Должен начинаться с @ и содержать только буквы, цифры и подчеркивания
+        pattern = r'^@[a-zA-Z0-9_]{5,32}$'
+        return bool(re.match(pattern, username))
+    
     async def add_contact_interactive(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Интерактивное добавление контакта"""
         await update.message.reply_text(
@@ -62,6 +80,30 @@ class ContactHandlers:
         
         if not contact_data.get('name'):
             await update.message.reply_text("❌ Не удалось определить имя контакта")
+            return
+        
+        # Валидация email
+        if contact_data.get('email') and not self._validate_email(contact_data['email']):
+            await update.message.reply_text(
+                f"❌ Некорректный email: `{self._md_escape(contact_data['email'])}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        if contact_data.get('email2') and not self._validate_email(contact_data['email2']):
+            await update.message.reply_text(
+                f"❌ Некорректный второй email: `{self._md_escape(contact_data['email2'])}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Валидация telegram
+        if contact_data.get('telegram') and not self._validate_telegram(contact_data['telegram']):
+            await update.message.reply_text(
+                f"❌ Некорректный Telegram username: `{self._md_escape(contact_data['telegram'])}`\n"
+                f"Должен начинаться с @ и содержать 5-32 символа (буквы, цифры, подчеркивания)",
+                parse_mode='Markdown'
+            )
             return
         
         # Сохранение в базу
@@ -376,6 +418,30 @@ class ContactHandlers:
         if not contact:
             await update.message.reply_text(
                 f"❌ Контакт `{self._md_escape(identifier)}` не найден.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Валидация email полей
+        if 'email' in updates and updates['email'] and not self._validate_email(updates['email']):
+            await update.message.reply_text(
+                f"❌ Некорректный email: `{self._md_escape(updates['email'])}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        if 'email2' in updates and updates['email2'] and not self._validate_email(updates['email2']):
+            await update.message.reply_text(
+                f"❌ Некорректный второй email: `{self._md_escape(updates['email2'])}`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Валидация telegram
+        if 'telegram' in updates and updates['telegram'] and not self._validate_telegram(updates['telegram']):
+            await update.message.reply_text(
+                f"❌ Некорректный Telegram username: `{self._md_escape(updates['telegram'])}`\n"
+                f"Должен начинаться с @ и содержать 5-32 символа (буквы, цифры, подчеркивания)",
                 parse_mode='Markdown'
             )
             return
