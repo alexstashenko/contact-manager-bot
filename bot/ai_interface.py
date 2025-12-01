@@ -18,7 +18,7 @@ class AIInterface:
             raise ValueError("GEMINI_API_KEY не найден в переменных окружения")
         
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
     
     async def process_query(self, user_query: str) -> str:
         """
