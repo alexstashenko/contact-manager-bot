@@ -451,13 +451,28 @@ class ContactHandlers:
             updates = {}
             master_tags = set(master.get('tags') or [])
             
+            # Сбор всех телефонов и email'ов
+            all_phones = set()
+            if master.get('phone'): all_phones.add(master['phone'])
+            if master.get('phone2'): all_phones.add(master['phone2'])
+            
+            all_emails = set()
+            if master.get('email'): all_emails.add(master['email'])
+            if master.get('email2'): all_emails.add(master['email2'])
+            
             for other in others:
-                # Объединяем поля, если в master пусто, а в other есть
-                for field in ['company', 'position', 'email', 'telegram', 'phone', 'bio']:
+                # Объединяем простые поля, если в master пусто
+                for field in ['company', 'position', 'telegram', 'bio']:
                     if not master.get(field) and other.get(field):
                         updates[field] = other[field]
-                        master[field] = other[field] # Обновляем локально для следующих итераций
-                        merged_fields.append(field)
+                        master[field] = other[field]
+                
+                # Собираем телефоны и email'ы
+                if other.get('phone'): all_phones.add(other['phone'])
+                if other.get('phone2'): all_phones.add(other['phone2'])
+                
+                if other.get('email'): all_emails.add(other['email'])
+                if other.get('email2'): all_emails.add(other['email2'])
                 
                 # Объединяем теги
                 if other.get('tags'):
@@ -475,6 +490,15 @@ class ContactHandlers:
                 await self._run_db(
                     lambda: self.supabase.table('contacts').delete().eq('id', other['id']).execute()
                 )
+            
+            # Обновляем телефоны и email'ы в master
+            phones_list = list(all_phones)
+            if len(phones_list) > 0: updates['phone'] = phones_list[0]
+            if len(phones_list) > 1: updates['phone2'] = phones_list[1]
+            
+            emails_list = list(all_emails)
+            if len(emails_list) > 0: updates['email'] = emails_list[0]
+            if len(emails_list) > 1: updates['email2'] = emails_list[1]
             
             # Обновляем master контакт
             if master_tags:
@@ -578,23 +602,20 @@ class ContactHandlers:
         except ValueError:
             return {}
         
-        for token in tokens:
-            if '=' not in token:
-                continue
-            field, value = token.split('=', 1)
-            field = field.strip().lower()
-            value = value.strip()
-            
-            if field not in allowed_fields or not value:
-                continue
-            
-            if field == 'tags':
-                tags = [tag.strip() for tag in value.split(',') if tag.strip()]
-                updates[field] = tags
-            else:
-                updates[field] = value
+        # Парсинг аргументов
+        for arg in tokens: # Changed from context.args[1:] to tokens
+            if '=' in arg:
+                key, value = arg.split('=', 1)
+                key = key.strip().lower() # Added .lower() for consistency
+                # Удаляем кавычки если есть
+                value = value.strip('"').strip("'")
+                
+                if key in ['company', 'position', 'email', 'email2', 'telegram', 'phone', 'phone2', 'bio', 'name']: # Added 'name'
+                    updates[key] = value
+                elif key == 'tags':
+                    updates['tags'] = [t.strip() for t in value.split(',') if t.strip()] # Added if t.strip() to avoid empty tags
         
-        return updates
+        return updates # Removed the if not updates block as it's likely for the handler, not this parser.
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка загрузки файлов с контактами"""

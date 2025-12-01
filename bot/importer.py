@@ -21,11 +21,19 @@ def parse_vcard(content: str) -> List[Dict[str, Any]]:
         
         # Email
         if hasattr(vcard, 'email'):
-            contact['email'] = str(vcard.email.value)
-        
+            emails = [e.value for e in vcard.email_list]
+            if emails:
+                contact['email'] = emails[0]
+            if len(emails) > 1:
+                contact['email2'] = emails[1]
+                
         # Phone
         if hasattr(vcard, 'tel'):
-            contact['phone'] = str(vcard.tel.value)
+            phones = [t.value for t in vcard.tel_list]
+            if phones:
+                contact['phone'] = phones[0]
+            if len(phones) > 1:
+                contact['phone2'] = phones[1]
         
         # Organization
         if hasattr(vcard, 'org'):
@@ -35,7 +43,22 @@ def parse_vcard(content: str) -> List[Dict[str, Any]]:
         if hasattr(vcard, 'title'):
             contact['position'] = str(vcard.title.value)
         
+        # Telegram (X-SOCIALPROFILE or note)
+        if hasattr(vcard, 'x_socialprofile'):
+            for profile in vcard.x_socialprofile_list:
+                if 'telegram' in profile.value.lower() or 't.me' in profile.value.lower():
+                    contact['telegram'] = profile.value
+                    break
+                    
+        if not contact.get('telegram') and hasattr(vcard, 'note'):
+            # Попытка найти @username в заметках
+            import re
+            match = re.search(r'@[\w_]+', vcard.note.value)
+            if match:
+                contact['telegram'] = match.group(0)
+        
         contacts.append(contact)
+        
     return contacts
 
 def parse_csv(content: Union[str, bytes, io.StringIO, io.BytesIO]) -> List[Dict[str, Any]]:
@@ -69,8 +92,10 @@ def parse_csv(content: Union[str, bytes, io.StringIO, io.BytesIO]) -> List[Dict[
             'company': row.get('company'),
             'position': row.get('position'),
             'email': row.get('email'),
+            'email2': row.get('email2'),
             'telegram': row.get('telegram'),
             'phone': row.get('phone'),
+            'phone2': row.get('phone2'),
             'source': 'import_csv'
         }
         
