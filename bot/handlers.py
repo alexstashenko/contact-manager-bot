@@ -469,6 +469,7 @@ class ContactHandlers:
     async def merge_contacts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Объединение дубликатов контактов по имени.
+        Использует stored procedure для атомарного выполнения (защита от race condition).
         Формат: /merge Имя Фамилия
         """
         if not context.args:
@@ -482,104 +483,33 @@ class ContactHandlers:
         name_query = ' '.join(context.args).strip()
         
         try:
-            # 1. Найти все контакты с таким именем (точный поиск)
-            response = await self._run_db(
-                lambda: self.supabase.table('contacts').select('*').ilike('name', name_query).execute()
+            # Вызываем stored procedure через RPC для атомарного выполнения
+            result = await self._run_db(
+                lambda: self.supabase.rpc('merge_contacts_by_name', {'contact_name': name_query}).execute()
             )
             
-            duplicates = response.data
+            data = result.data
             
-            if not duplicates or len(duplicates) < 2:
+            if not data.get('success'):
                 await update.message.reply_text(
-                    f"ℹ️ Найдено контактов с именем **{self._md_escape(name_query)}**: {len(duplicates)}.\n"
+                    f"❌ Ошибка: {data.get('error', 'Unknown error')}",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            if data.get('deleted_count', 0) == 0:
+                await update.message.reply_text(
+                    f"ℹ️ Найден только 1 контакт с именем **{self._md_escape(name_query)}**.\n"
                     "Для объединения нужно минимум 2 контакта.",
                     parse_mode='Markdown'
                 )
                 return
             
-            # 2. Выбрать основной контакт (тот, у которого больше всего заполненных полей)
-            def score_contact(c):
-                score = 0
-                if c.get('telegram'): score += 2
-                if c.get('email'): score += 2
-                if c.get('phone'): score += 1
-                if c.get('company'): score += 1
-                if c.get('bio'): score += 1
-                return score
-            
-            duplicates.sort(key=score_contact, reverse=True)
-            master = duplicates[0]
-            others = duplicates[1:]
-            
-            merged_fields = []
-            
-            # 3. Объединить данные
-            updates = {}
-            master_tags = set(master.get('tags') or [])
-            
-            # Сбор всех телефонов и email'ов
-            all_phones = set()
-            if master.get('phone'): all_phones.add(master['phone'])
-            if master.get('phone2'): all_phones.add(master['phone2'])
-            
-            all_emails = set()
-            if master.get('email'): all_emails.add(master['email'])
-            if master.get('email2'): all_emails.add(master['email2'])
-            
-            for other in others:
-                # Объединяем простые поля, если в master пусто
-                for field in ['company', 'position', 'telegram', 'bio']:
-                    if not master.get(field) and other.get(field):
-                        updates[field] = other[field]
-                        master[field] = other[field]
-                
-                # Собираем телефоны и email'ы
-                if other.get('phone'): all_phones.add(other['phone'])
-                if other.get('phone2'): all_phones.add(other['phone2'])
-                
-                if other.get('email'): all_emails.add(other['email'])
-                if other.get('email2'): all_emails.add(other['email2'])
-                
-                # Объединяем теги
-                if other.get('tags'):
-                    master_tags.update(other['tags'])
-                
-                # Переносим взаимодействия
-                await self._run_db(
-                    lambda: self.supabase.table('interactions')
-                    .update({'contact_id': master['id']})
-                    .eq('contact_id', other['id'])
-                    .execute()
-                )
-                
-                # Удаляем дубликат
-                await self._run_db(
-                    lambda: self.supabase.table('contacts').delete().eq('id', other['id']).execute()
-                )
-            
-            # Обновляем телефоны и email'ы в master
-            phones_list = list(all_phones)
-            if len(phones_list) > 0: updates['phone'] = phones_list[0]
-            if len(phones_list) > 1: updates['phone2'] = phones_list[1]
-            
-            emails_list = list(all_emails)
-            if len(emails_list) > 0: updates['email'] = emails_list[0]
-            if len(emails_list) > 1: updates['email2'] = emails_list[1]
-            
-            # Обновляем master контакт
-            if master_tags:
-                updates['tags'] = list(master_tags)
-            
-            if updates:
-                await self._run_db(
-                    lambda: self.supabase.table('contacts').update(updates).eq('id', master['id']).execute()
-                )
-            
             await update.message.reply_text(
-                f"✅ Успешно объединено **{len(duplicates)}** контактов в один:\n"
-                f"👤 **{self._md_escape(master['name'])}**\n"
-                f"🆔 ID: {master['id']}\n"
-                f"🗑 Удалено дубликатов: {len(others)}",
+                f"✅ Успешно объединено **{data['deleted_count'] + 1}** контактов в один:\n"
+                f"👤 **{self._md_escape(data['master_name'])}**\n"
+                f"🆔 ID: {data['master_id']}\n"
+                f"🗑 Удалено дубликатов: {data['deleted_count']}",
                 parse_mode='Markdown'
             )
             
