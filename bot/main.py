@@ -90,6 +90,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 `/add` - Интерактивное добавление
 `/quick` - Быстрое добавление одной строкой
 `/edit` - Редактирование контакта
+`/merge` - Объединение дубликатов
 `/profile` - Импорт имени и био из Telegram
 `/list` - Показать последние 10 контактов
 
@@ -108,6 +109,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 **Редактирование:**
 `/edit @ivan company="New Corp" position="CEO"`
+
+**Объединение дубликатов:**
+`/merge Иван Петров`
 
 **Импорт профиля:**
 `/profile @username`
@@ -244,6 +248,7 @@ def main():
     application.add_handler(CommandHandler("list", contact_handlers.list_recent_contacts))
     application.add_handler(CommandHandler("profile", contact_handlers.import_profile))
     application.add_handler(CommandHandler("edit", contact_handlers.edit_contact))
+    application.add_handler(CommandHandler("merge", contact_handlers.merge_contacts))
     
     # Обработчик файлов (импорт контактов)
     application.add_handler(MessageHandler(filters.Document.ALL, contact_handlers.handle_document))

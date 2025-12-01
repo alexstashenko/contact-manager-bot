@@ -399,6 +399,102 @@ class ContactHandlers:
             )
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка при обновлении: {self._md_escape(e)}")
+
+    async def merge_contacts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Объединение дубликатов контактов по имени.
+        Формат: /merge Имя Фамилия
+        """
+        if not context.args:
+            await update.message.reply_text(
+                "🔄 Укажите имя для объединения дубликатов:\n"
+                "`/merge Иван Петров`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        name_query = ' '.join(context.args).strip()
+        
+        try:
+            # 1. Найти все контакты с таким именем (точный поиск)
+            response = await self._run_db(
+                lambda: self.supabase.table('contacts').select('*').ilike('name', name_query).execute()
+            )
+            
+            duplicates = response.data
+            
+            if not duplicates or len(duplicates) < 2:
+                await update.message.reply_text(
+                    f"ℹ️ Найдено контактов с именем **{self._md_escape(name_query)}**: {len(duplicates)}.\n"
+                    "Для объединения нужно минимум 2 контакта.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # 2. Выбрать основной контакт (тот, у которого больше всего заполненных полей)
+            def score_contact(c):
+                score = 0
+                if c.get('telegram'): score += 2
+                if c.get('email'): score += 2
+                if c.get('phone'): score += 1
+                if c.get('company'): score += 1
+                if c.get('bio'): score += 1
+                return score
+            
+            duplicates.sort(key=score_contact, reverse=True)
+            master = duplicates[0]
+            others = duplicates[1:]
+            
+            merged_fields = []
+            
+            # 3. Объединить данные
+            updates = {}
+            master_tags = set(master.get('tags') or [])
+            
+            for other in others:
+                # Объединяем поля, если в master пусто, а в other есть
+                for field in ['company', 'position', 'email', 'telegram', 'phone', 'bio']:
+                    if not master.get(field) and other.get(field):
+                        updates[field] = other[field]
+                        master[field] = other[field] # Обновляем локально для следующих итераций
+                        merged_fields.append(field)
+                
+                # Объединяем теги
+                if other.get('tags'):
+                    master_tags.update(other['tags'])
+                
+                # Переносим взаимодействия
+                await self._run_db(
+                    lambda: self.supabase.table('interactions')
+                    .update({'contact_id': master['id']})
+                    .eq('contact_id', other['id'])
+                    .execute()
+                )
+                
+                # Удаляем дубликат
+                await self._run_db(
+                    lambda: self.supabase.table('contacts').delete().eq('id', other['id']).execute()
+                )
+            
+            # Обновляем master контакт
+            if master_tags:
+                updates['tags'] = list(master_tags)
+            
+            if updates:
+                await self._run_db(
+                    lambda: self.supabase.table('contacts').update(updates).eq('id', master['id']).execute()
+                )
+            
+            await update.message.reply_text(
+                f"✅ Успешно объединено **{len(duplicates)}** контактов в один:\n"
+                f"👤 **{self._md_escape(master['name'])}**\n"
+                f"🆔 ID: {master['id']}\n"
+                f"🗑 Удалено дубликатов: {len(others)}",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка при объединении: {self._md_escape(e)}")
     
     # === Вспомогательные методы ===
     
