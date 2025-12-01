@@ -283,3 +283,59 @@ class ContactHandlers:
                 return None
         
         return None
+
+    async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка загрузки файлов с контактами"""
+        document = update.message.document
+        file_name = document.file_name
+        
+        # Проверка размера (например, до 5МБ)
+        if document.file_size > 5 * 1024 * 1024:
+            await update.message.reply_text("❌ Файл слишком большой. Максимальный размер 5 МБ.")
+            return
+
+        status_message = await update.message.reply_text("📥 Скачиваю и обрабатываю файл...")
+        
+        try:
+            file = await context.bot.get_file(document.file_id)
+            file_byte_array = await file.download_as_bytearray()
+            
+            # Импорт
+            import io
+            import importer
+            
+            contacts = []
+            
+            if file_name.lower().endswith('.vcf'):
+                content = file_byte_array.decode('utf-8')
+                contacts = importer.parse_vcard(content)
+            elif file_name.lower().endswith('.csv'):
+                content = io.BytesIO(file_byte_array)
+                contacts = importer.parse_csv(content)
+            elif file_name.lower().endswith('.json'):
+                content = file_byte_array.decode('utf-8')
+                contacts = importer.parse_json(content)
+            else:
+                await status_message.edit_text(
+                    "❌ Неподдерживаемый формат файла.\n"
+                    "Поддерживаются: .vcf, .csv, .json"
+                )
+                return
+            
+            if not contacts:
+                await status_message.edit_text("⚠️ В файле не найдено контактов.")
+                return
+            
+            # Вставка в базу
+            result = importer.batch_insert_contacts(self.supabase, contacts)
+            
+            await status_message.edit_text(
+                f"📊 **Результаты импорта:**\n\n"
+                f"✅ Импортировано: {result['imported']}\n"
+                f"⚠️ Пропущено (дубликаты): {result['duplicates']}\n"
+                f"❌ Ошибок: {result['errors']}",
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            await status_message.edit_text(f"❌ Ошибка при обработке файла: {str(e)}")

@@ -215,6 +215,9 @@ def main():
     application.add_handler(CommandHandler("find", contact_handlers.find_contact))
     application.add_handler(CommandHandler("list", contact_handlers.list_recent_contacts))
     
+    # Обработчик файлов (импорт контактов)
+    application.add_handler(MessageHandler(filters.Document.ALL, contact_handlers.handle_document))
+    
     # Обработчик обычных сообщений (ИИ-запросы)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
