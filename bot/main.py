@@ -5,6 +5,7 @@ Telegram бот для управления контактами с ИИ-инт�
 
 import os
 import logging
+import asyncio
 from dotenv import load_dotenv
 
 from telegram import Update
@@ -139,11 +140,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Определить тип и сохранить заметку
             interaction_type = contact_handlers._detect_interaction_type(user_message)
             
-            supabase.table('interactions').insert({
-                'contact_id': contact_id,
-                'type': interaction_type,
-                'note': user_message
-            }).execute()
+            await asyncio.to_thread(
+                lambda: supabase.table('interactions')
+                .insert({
+                    'contact_id': contact_id,
+                    'type': interaction_type,
+                    'note': user_message
+                })
+                .execute()
+            )
             
             await update.message.reply_text(
                 f"✅ Заметка сохранена!\n"
@@ -206,7 +211,11 @@ def main():
             await update.message.reply_text(
                 "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
             )
-        application.add_handler(MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler), group=0)
+        application.add_handler(
+            MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler),
+            group=0,
+            block=True
+        )
     # -------------------------------------------
 
     application.add_handler(CommandHandler("start", start_command))

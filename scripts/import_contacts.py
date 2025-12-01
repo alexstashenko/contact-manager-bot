@@ -58,8 +58,8 @@ def main():
             
         elif ext == '.csv':
             print(f"📥 Импорт из CSV: {file_path}")
-            # parse_csv принимает путь к файлу или контент
-            contacts = parse_csv(file_path)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                contacts = parse_csv(f)
             
         elif ext == '.json':
             print(f"📥 Импорт из JSON: {file_path}")

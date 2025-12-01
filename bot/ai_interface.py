@@ -4,6 +4,7 @@ Contacts Manager Bot - AI Interface
 """
 
 import os
+import asyncio
 import google.generativeai as genai
 from supabase import Client
 
@@ -19,6 +20,10 @@ class AIInterface:
         
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    async def _run_io(self, func, *args, **kwargs):
+        """Выполнить блокирующую операцию в отдельном потоке"""
+        return await asyncio.to_thread(func, *args, **kwargs)
     
     async def process_query(self, user_query: str) -> str:
         """
@@ -56,7 +61,7 @@ class AIInterface:
 
         # Шаг 4: Получить ответ от Gemini
         try:
-            response = self.model.generate_content(prompt)
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
             return self._format_response(response.text)
         except Exception as e:
             return f"❌ Ошибка при обработке запроса: {str(e)}"
@@ -65,7 +70,9 @@ class AIInterface:
         """Получить контакты с последними взаимодействиями"""
         try:
             # Используем представление contact_summary для оптимизации
-            response = self.supabase.table('contact_summary').select('*').limit(200).execute()
+            response = await self._run_io(
+                lambda: self.supabase.table('contact_summary').select('*').limit(200).execute()
+            )
             return response.data
         except Exception as e:
             print(f"Ошибка получения данных: {e}")
@@ -135,15 +142,21 @@ class AIInterface:
         """Получить статистику по контактам"""
         try:
             # Общее количество контактов
-            contacts_resp = self.supabase.table('contacts').select('id', count='exact').execute()
+            contacts_resp = await self._run_io(
+                lambda: self.supabase.table('contacts').select('id', count='exact').execute()
+            )
             total_contacts = contacts_resp.count
             
             # Количество взаимодействий
-            interactions_resp = self.supabase.table('interactions').select('id', count='exact').execute()
+            interactions_resp = await self._run_io(
+                lambda: self.supabase.table('interactions').select('id', count='exact').execute()
+            )
             total_interactions = interactions_resp.count
             
             # Контакты с тегами
-            tagged_resp = self.supabase.table('contacts').select('tags').execute()
+            tagged_resp = await self._run_io(
+                lambda: self.supabase.table('contacts').select('tags').execute()
+            )
             all_tags = []
             for contact in tagged_resp.data:
                 if contact.get('tags'):

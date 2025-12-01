@@ -3,18 +3,32 @@ Contacts Manager Bot - Handlers
 Обработчики команд для работы с контактами
 """
 
+import asyncio
+import re
+import shlex
+from datetime import datetime
+
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
+from telegram.helpers import escape_markdown
 from supabase import Client
-from datetime import datetime
-import re
-import shlex
 
 
 class ContactHandlers:
     def __init__(self, supabase_client: Client):
         self.supabase = supabase_client
+    
+    async def _run_db(self, func):
+        """Выполнить блокирующий запрос в отдельном потоке"""
+        return await asyncio.to_thread(func)
+    
+    @staticmethod
+    def _md_escape(value) -> str:
+        """Экранировать пользовательский текст для Markdown"""
+        if value is None:
+            return ''
+        return escape_markdown(str(value), version=1)
     
     async def add_contact_interactive(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Интерактивное добавление контакта"""
@@ -52,14 +66,16 @@ class ContactHandlers:
         
         # Сохранение в базу
         try:
-            result = self.supabase.table('contacts').insert({
-                'name': contact_data['name'],
-                'company': contact_data.get('company'),
-                'position': contact_data.get('position'),
-                'email': contact_data.get('email'),
-                'telegram': contact_data.get('telegram'),
-                'source': 'telegram_bot'
-            }).execute()
+            result = await self._run_db(
+                lambda: self.supabase.table('contacts').insert({
+                    'name': contact_data['name'],
+                    'company': contact_data.get('company'),
+                    'position': contact_data.get('position'),
+                    'email': contact_data.get('email'),
+                    'telegram': contact_data.get('telegram'),
+                    'source': 'telegram_bot'
+                }).execute()
+            )
             
             contact_id = result.data[0]['id']
             
@@ -67,14 +83,14 @@ class ContactHandlers:
             context.user_data['pending_note_contact_id'] = contact_id
             
             await update.message.reply_text(
-                f"✅ Контакт **{contact_data['name']}** добавлен!\n\n"
+                f"✅ Контакт **{self._md_escape(contact_data['name'])}** добавлен!\n\n"
                 f"Хотите добавить заметку о том, где познакомились? "
                 f"Просто отправьте сообщение или используйте /skip",
                 parse_mode='Markdown'
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при сохранении: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка при сохранении: {self._md_escape(e)}")
     
     async def add_note(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -103,7 +119,7 @@ class ContactHandlers:
         
         if not contact:
             await update.message.reply_text(
-                f"❌ Контакт `{identifier}` не найден\n\n"
+                f"❌ Контакт `{self._md_escape(identifier)}` не найден\n\n"
                 f"Используйте /find для поиска или /quick для добавления",
                 parse_mode='Markdown'
             )
@@ -117,23 +133,25 @@ class ContactHandlers:
         
         # Сохранить взаимодействие
         try:
-            self.supabase.table('interactions').insert({
-                'contact_id': contact['id'],
-                'type': interaction_type,
-                'note': note_text,
-                'amount': amount,
-                'date': datetime.now().date().isoformat()
-            }).execute()
+            await self._run_db(
+                lambda: self.supabase.table('interactions').insert({
+                    'contact_id': contact['id'],
+                    'type': interaction_type,
+                    'note': note_text,
+                    'amount': amount,
+                    'date': datetime.now().date().isoformat()
+                }).execute()
+            )
             
             await update.message.reply_text(
-                f"✅ Заметка добавлена для **{contact['name']}**\n"
-                f"Тип: {interaction_type}\n"
+                f"✅ Заметка добавлена для **{self._md_escape(contact['name'])}**\n"
+                f"Тип: {self._md_escape(interaction_type)}\n"
                 f"Дата: {datetime.now().date().strftime('%d.%m.%Y')}",
                 parse_mode='Markdown'
             )
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка: {self._md_escape(e)}")
     
     async def find_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Поиск контакта по имени, компании или тегу"""
@@ -149,6 +167,7 @@ class ContactHandlers:
         
         original_query = ' '.join(context.args).strip()
         search_query = original_query.lower()
+        original_query_md = self._md_escape(original_query)
         
         try:
             query = self.supabase.table('contacts').select('*')
@@ -163,7 +182,7 @@ class ContactHandlers:
                     f"name.ilike.{like},company.ilike.{like},position.ilike.{like}"
                 ).limit(200)
             
-            response = query.execute()
+            response = await self._run_db(query.execute)
             
             results = []
             for contact in response.data:
@@ -177,25 +196,31 @@ class ContactHandlers:
                     results.append(contact)
             
             if not results:
-                await update.message.reply_text(f"❌ Контакты по запросу `{search_query}` не найдены", parse_mode='Markdown')
+                await update.message.reply_text(
+                    f"❌ Контакты по запросу `{original_query_md}` не найдены",
+                    parse_mode='Markdown'
+                )
                 return
             
             # Форматировать результаты
             message = f"🔍 Найдено контактов: {len(results)}\n\n"
             
             for contact in results[:10]:  # Показать первые 10
-                message += f"👤 **{contact['name']}**\n"
+                name_md = self._md_escape(contact.get('name', ''))
+                message += f"👤 **{name_md}**\n"
                 
                 if contact.get('company'):
-                    message += f"   🏢 {contact['company']}"
+                    company_md = self._md_escape(contact['company'])
+                    message += f"   🏢 {company_md}"
                     if contact.get('position'):
-                        message += f", {contact['position']}"
+                        position_md = self._md_escape(contact['position'])
+                        message += f", {position_md}"
                     message += "\n"
                 
                 if contact.get('telegram'):
-                    message += f"   📱 {contact['telegram']}\n"
+                    message += f"   📱 {self._md_escape(contact['telegram'])}\n"
                 if contact.get('email'):
-                    message += f"   📧 {contact['email']}\n"
+                    message += f"   📧 {self._md_escape(contact['email'])}\n"
                 
                 message += "\n"
             
@@ -210,7 +235,9 @@ class ContactHandlers:
     async def list_recent_contacts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Показать последние добавленные контакты"""
         try:
-            response = self.supabase.table('contacts').select('*').order('created_at', desc=True).limit(10).execute()
+            response = await self._run_db(
+                lambda: self.supabase.table('contacts').select('*').order('created_at', desc=True).limit(10).execute()
+            )
             
             if not response.data:
                 await update.message.reply_text("📝 Контактов пока нет. Добавьте их с помощью /add или /quick")
@@ -219,11 +246,11 @@ class ContactHandlers:
             message = "📋 **Последние контакты:**\n\n"
             
             for contact in response.data:
-                message += f"👤 {contact['name']}\n"
+                message += f"👤 {self._md_escape(contact['name'])}\n"
                 if contact.get('company'):
-                    message += f"   🏢 {contact['company']}\n"
+                    message += f"   🏢 {self._md_escape(contact['company'])}\n"
                 if contact.get('telegram'):
-                    message += f"   📱 {contact['telegram']}\n"
+                    message += f"   📱 {self._md_escape(contact['telegram'])}\n"
                 message += "\n"
             
             await update.message.reply_text(message, parse_mode='Markdown')
@@ -270,10 +297,10 @@ class ContactHandlers:
                     "❌ Пользователь заблокировал бота. Сначала попросите его разблокировать и написать /start."
                 )
             else:
-                await update.message.reply_text(f"❌ Не удалось получить профиль: {error_text}")
+                await update.message.reply_text(f"❌ Не удалось получить профиль: {self._md_escape(error_text)}")
             return
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка Telegram API: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка Telegram API: {self._md_escape(e)}")
             return
         
         display_name = chat.full_name or chat.title or telegram_handle
@@ -293,9 +320,11 @@ class ContactHandlers:
                     await update.message.reply_text("ℹ️ Данные уже актуальны, изменений нет.")
                     return
                 
-                self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
+                await self._run_db(
+                    lambda: self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
+                )
                 await update.message.reply_text(
-                    f"✅ Контакт **{contact['name']}** обновлён.\n"
+                    f"✅ Контакт **{self._md_escape(contact['name'])}** обновлён.\n"
                     f"{'Описание обновлено.' if bio_text else 'Описание отсутствует в профиле.'}",
                     parse_mode='Markdown'
                 )
@@ -307,13 +336,13 @@ class ContactHandlers:
                     'bio_source': 'telegram_profile',
                     'source': 'telegram_profile'
                 }
-                self.supabase.table('contacts').insert(new_contact).execute()
+                await self._run_db(lambda: self.supabase.table('contacts').insert(new_contact).execute())
                 await update.message.reply_text(
-                    f"✅ Контакт **{display_name}** создан на основе профиля Telegram.",
+                    f"✅ Контакт **{self._md_escape(display_name)}** создан на основе профиля Telegram.",
                     parse_mode='Markdown'
                 )
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при сохранении: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка при сохранении: {self._md_escape(e)}")
     
     async def edit_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -346,22 +375,30 @@ class ContactHandlers:
         contact = await self._find_contact(identifier)
         if not contact:
             await update.message.reply_text(
-                f"❌ Контакт `{identifier}` не найден.",
+                f"❌ Контакт `{self._md_escape(identifier)}` не найден.",
                 parse_mode='Markdown'
             )
             return
         
         try:
-            self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
-            fields_pretty = ', '.join(f"{key} → {value}" if key != 'tags' else f"tags → {', '.join(value)}"
-                                      for key, value in updates.items())
+            await self._run_db(
+                lambda: self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
+            )
+            fields_parts = []
+            for key, value in updates.items():
+                if key == 'tags':
+                    safe_value = ', '.join(self._md_escape(tag) for tag in value)
+                else:
+                    safe_value = self._md_escape(value)
+                fields_parts.append(f"{key} → {safe_value}")
+            fields_pretty = ', '.join(fields_parts)
             await update.message.reply_text(
-                f"✅ Контакт **{contact['name']}** обновлён.\n"
+                f"✅ Контакт **{self._md_escape(contact['name'])}** обновлён.\n"
                 f"Изменения: {fields_pretty}",
                 parse_mode='Markdown'
             )
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при обновлении: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка при обновлении: {self._md_escape(e)}")
     
     # === Вспомогательные методы ===
     
@@ -391,13 +428,13 @@ class ContactHandlers:
         """Найти контакт по telegram или email"""
         try:
             if identifier.startswith('@'):
-                response = self.supabase.table('contacts').select('*').eq('telegram', identifier).execute()
+                query = lambda: self.supabase.table('contacts').select('*').eq('telegram', identifier).execute()
             elif '@' in identifier:
-                response = self.supabase.table('contacts').select('*').eq('email', identifier).execute()
+                query = lambda: self.supabase.table('contacts').select('*').eq('email', identifier).execute()
             else:
-                # Попытка поиска по имени
-                response = self.supabase.table('contacts').select('*').ilike('name', f'%{identifier}%').execute()
+                query = lambda: self.supabase.table('contacts').select('*').ilike('name', f'%{identifier}%').execute()
             
+            response = await self._run_db(query)
             return response.data[0] if response.data else None
             
         except Exception as e:
@@ -506,7 +543,7 @@ class ContactHandlers:
                 return
             
             # Вставка в базу
-            result = importer.batch_insert_contacts(self.supabase, contacts)
+            result = await asyncio.to_thread(importer.batch_insert_contacts, self.supabase, contacts)
             
             await status_message.edit_text(
                 f"📊 **Результаты импорта:**\n\n"
