@@ -185,6 +185,24 @@ def main():
     application = Application.builder().token(token).build()
     
     # Регистрация обработчиков команд
+    
+    # --- БЛОКИРОВКА ДОСТУПА ДЛЯ ПОСТОРОННИХ ---
+    ADMIN_ID = 1031225569
+    
+    async def unauthorized_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик для неавторизованных пользователей"""
+        await update.message.reply_text(
+            "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
+        )
+
+    # Этот хендлер должен быть ПЕРВЫМ. 
+    # ~filters.User(user_id=ADMIN_ID) означает "все пользователи КРОМЕ админа"
+    # block=False не ставим, чтобы он прерывал цепочку (по умолчанию в PTB один хендлер срабатывает)
+    # Но постойте, в PTB по умолчанию срабатывает первый подходящий хендлер в группе.
+    # Если мы добавим его первым, он перехватит всё для чужаков.
+    application.add_handler(MessageHandler(~filters.User(user_id=ADMIN_ID), unauthorized_handler), group=0)
+    # -------------------------------------------
+
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("stats", stats_command))
