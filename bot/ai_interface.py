@@ -25,9 +25,59 @@ class AIInterface:
         """Выполнить блокирующую операцию в отдельном потоке"""
         return await asyncio.to_thread(func, *args, **kwargs)
     
+    def _analyze_query(self, query: str) -> dict:
+        """
+        Анализ запроса для определения типа фильтрации.
+        
+        Returns:
+            {
+                'type': 'name_search' | 'company_search' | 'tag_search' | 'complex',
+                'filter': extracted search term or None
+            }
+        """
+        import re
+        
+        query_lower = query.lower().strip()
+        
+        # Простой поиск по имени
+        name_patterns = [
+            r'^(?:покажи|выведи|открой|найди|кто такой|кто такая)\s+(.+)$',
+            r'^@?([a-zA-Zа-яА-ЯёЁ\s]+)$',  # Просто имя без глаголов
+        ]
+        
+        for pattern in name_patterns:
+            match = re.match(pattern, query_lower)
+            if match:
+                return {'type': 'name_search', 'filter': match.group(1).strip()}
+        
+        # Поиск по компании
+        company_patterns = [
+            r'(?:кто|все|контакты)\s+(?:из|в)\s+(.+)',
+            r'(.+)\s+компания',
+        ]
+        
+        for pattern in company_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return {'type': 'company_search', 'filter': match.group(1).strip()}
+        
+        # Поиск по тегу
+        tag_patterns = [
+            r'(?:все|кто)\s+(hr|разработчик|менеджер|дизайнер|маркетолог)',
+            r'#(\w+)',
+        ]
+        
+        for pattern in tag_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return {'type': 'tag_search', 'filter': match.group(1).strip()}
+        
+        # Сложный запрос (требует анализа всех контактов)
+        return {'type': 'complex', 'filter': None}
+    
     async def process_query(self, user_query: str) -> str:
         """
-        Обработка естественноязычного запроса пользователя
+        Обработка естественноязычного запроса пользователя с умной предфильтрацией.
         
         Args:
             user_query: Вопрос пользователя (например: "Кто у меня есть из HR?")
@@ -36,16 +86,25 @@ class AIInterface:
             Форматированный ответ для отправки в Telegram
         """
         
-        # Шаг 1: Получить все контакты из базы
-        contacts_data = await self._fetch_contacts_with_interactions()
+        # Шаг 1: Анализ запроса
+        query_analysis = self._analyze_query(user_query)
+        
+        # Шаг 2: Получить контакты с учетом фильтрации
+        contacts_data = await self._fetch_filtered_contacts(
+            query_type=query_analysis['type'],
+            filter_value=query_analysis['filter']
+        )
         
         if not contacts_data:
-            return "❌ В базе данных пока нет контактов. Добавьте их с помощью /add или /quick"
+            return "❌ Контакты не найдены. Попробуйте изменить запрос."
         
-        # Шаг 2: Подготовить контекст для Gemini
-        context = self._prepare_context(contacts_data)
+        # Шаг 3: Подготовить контекст для Gemini
+        # Для простых запросов отправляем все найденные (обычно 1-20)
+        # Для сложных - ограничиваем до 30
+        max_contacts = 30 if query_analysis['type'] == 'complex' else len(contacts_data)
+        context = self._prepare_context(contacts_data, max_contacts=min(max_contacts, len(contacts_data)))
         
-        # Шаг 3: Создать промпт
+        # Шаг 4: Создать промпт
         prompt = f"""Ты — помощник для управления контактами. У пользователя есть следующие контакты:
 
 {context}
@@ -62,12 +121,72 @@ class AIInterface:
 
 Отвечай по-русски, кратко и структурированно."""
 
-        # Шаг 4: Получить ответ от Gemini
+        # Шаг 5: Получить ответ от Gemini
         try:
             response = await asyncio.to_thread(self.model.generate_content, prompt)
             return self._format_response(response.text)
         except Exception as e:
             return f"❌ Ошибка при обработке запроса: {str(e)}"
+    
+    async def _fetch_filtered_contacts(self, query_type: str, filter_value: str = None) -> list:
+        """
+        Получить контакты с умной фильтрацией на уровне SQL.
+        
+        Args:
+            query_type: Тип запроса ('name_search', 'company_search', 'tag_search', 'complex')
+            filter_value: Значение для фильтрации (имя, компания, тег)
+        
+        Returns:
+            Отфильтрованный список контактов
+        """
+        try:
+            if query_type == 'name_search' and filter_value:
+                # Поиск по имени (case-insensitive)
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .ilike('name', f'%{filter_value}%')
+                    .limit(50)
+                    .execute()
+                )
+                return response.data
+            
+            elif query_type == 'company_search' and filter_value:
+                # Поиск по компании
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .ilike('company', f'%{filter_value}%')
+                    .limit(100)
+                    .execute()
+                )
+                return response.data
+            
+            elif query_type == 'tag_search' and filter_value:
+                # Поиск по тегу (используем contains для JSONB)
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .contains('tags', [filter_value])
+                    .limit(100)
+                    .execute()
+                )
+                return response.data
+            
+            else:
+                # Сложный запрос - возвращаем топ-30 по дате обновления
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .order('created_at', desc=True)
+                    .limit(30)
+                    .execute()
+                )
+                return response.data
+                
+        except Exception as e:
+            print(f"Ошибка получения данных: {e}")
+            return []
     
     async def _fetch_contacts_with_interactions(self) -> list:
         """Получить контакты с последними взаимодействиями"""
