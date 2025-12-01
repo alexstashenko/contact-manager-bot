@@ -5,9 +5,11 @@ Contacts Manager Bot - Handlers
 
 from telegram import Update
 from telegram.ext import ContextTypes
+from telegram.error import BadRequest
 from supabase import Client
 from datetime import datetime
 import re
+import shlex
 
 
 class ContactHandlers:
@@ -145,17 +147,33 @@ class ContactHandlers:
             )
             return
         
-        search_query = ' '.join(context.args).lower()
+        original_query = ' '.join(context.args).strip()
+        search_query = original_query.lower()
         
         try:
-            # Поиск по имени и компании
-            response = self.supabase.table('contacts').select('*').execute()
+            query = self.supabase.table('contacts').select('*')
+            
+            if original_query.startswith('@'):
+                query = query.ilike('telegram', original_query)
+            elif '@' in original_query and ' ' not in original_query:
+                query = query.ilike('email', original_query)
+            else:
+                like = f"%{search_query}%"
+                query = query.or_(
+                    f"name.ilike.{like},company.ilike.{like},position.ilike.{like}"
+                ).limit(200)
+            
+            response = query.execute()
             
             results = []
             for contact in response.data:
                 if (search_query in contact.get('name', '').lower() or
                     search_query in contact.get('company', '').lower() or
                     search_query in str(contact.get('tags', [])).lower()):
+                    results.append(contact)
+                elif original_query.startswith('@') and contact.get('telegram') == original_query:
+                    results.append(contact)
+                elif '@' in original_query and contact.get('email') == original_query:
                     results.append(contact)
             
             if not results:
@@ -212,6 +230,138 @@ class ContactHandlers:
             
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+    async def import_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Получить данные о контакте из Telegram по username и сохранить описание.
+        Формат: /profile @username
+        """
+        if not context.args:
+            await update.message.reply_text(
+                "🔗 Укажите username контакта:\n"
+                "`/profile @username`\n\n"
+                "Бот получит имя и описание из Telegram и сохранит их в базу.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        username = context.args[0].strip()
+        if username.startswith('@'):
+            username = username[1:]
+        
+        if not username:
+            await update.message.reply_text("❌ Некорректный username.")
+            return
+        
+        telegram_handle = f"@{username}"
+        
+        try:
+            chat = await context.bot.get_chat(username)
+        except BadRequest as e:
+            error_text = str(e)
+            if 'chat not found' in error_text.lower():
+                await update.message.reply_text(
+                    "❌ Telegram не даёт доступ к профилю: пользователь ещё не писал боту.\n"
+                    "Попросите человека открыть бота и набрать любое сообщение, после этого повторите /profile.",
+                    parse_mode='Markdown'
+                )
+            elif 'bot was blocked' in error_text.lower():
+                await update.message.reply_text(
+                    "❌ Пользователь заблокировал бота. Сначала попросите его разблокировать и написать /start."
+                )
+            else:
+                await update.message.reply_text(f"❌ Не удалось получить профиль: {error_text}")
+            return
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка Telegram API: {str(e)}")
+            return
+        
+        display_name = chat.full_name or chat.title or telegram_handle
+        bio_text = chat.bio or chat.description
+        
+        contact = await self._find_contact(telegram_handle)
+        try:
+            if contact:
+                updates = {'telegram': telegram_handle}
+                if display_name and display_name != contact.get('name'):
+                    updates['name'] = display_name
+                if bio_text:
+                    updates['bio'] = bio_text
+                    updates['bio_source'] = 'telegram_profile'
+                
+                if len(updates) == 1 and updates.get('telegram') == contact.get('telegram'):
+                    await update.message.reply_text("ℹ️ Данные уже актуальны, изменений нет.")
+                    return
+                
+                self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
+                await update.message.reply_text(
+                    f"✅ Контакт **{contact['name']}** обновлён.\n"
+                    f"{'Описание обновлено.' if bio_text else 'Описание отсутствует в профиле.'}",
+                    parse_mode='Markdown'
+                )
+            else:
+                new_contact = {
+                    'name': display_name,
+                    'telegram': telegram_handle,
+                    'bio': bio_text,
+                    'bio_source': 'telegram_profile',
+                    'source': 'telegram_profile'
+                }
+                self.supabase.table('contacts').insert(new_contact).execute()
+                await update.message.reply_text(
+                    f"✅ Контакт **{display_name}** создан на основе профиля Telegram.",
+                    parse_mode='Markdown'
+                )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка при сохранении: {str(e)}")
+    
+    async def edit_contact(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Редактирование существующего контакта.
+        Формат: /edit @username поле=значение поле2="значение с пробелами"
+        Доступные поля: name, company, position, email, telegram, phone, tags, bio
+        """
+        if not context.args or len(context.args) < 2:
+            await update.message.reply_text(
+                "✏️ Укажите контакт и изменения.\n\n"
+                "Формат:\n"
+                "`/edit @username company=\"New Corp\" position=\"Lead\"`\n"
+                "`/edit ivan@tech.com name=\"Иван Петров\" tags=\"HR, рекрутинг\"`\n\n"
+                "Доступные поля: name, company, position, email, telegram, phone, tags, bio\n"
+                "Используйте кавычки, если в значении есть пробелы.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        identifier = context.args[0]
+        updates = self._parse_update_fields(context.args[1:])
+        
+        if not updates:
+            await update.message.reply_text(
+                "❌ Не удалось распознать изменения. Используйте формат `поле=значение`.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        contact = await self._find_contact(identifier)
+        if not contact:
+            await update.message.reply_text(
+                f"❌ Контакт `{identifier}` не найден.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            self.supabase.table('contacts').update(updates).eq('id', contact['id']).execute()
+            fields_pretty = ', '.join(f"{key} → {value}" if key != 'tags' else f"tags → {', '.join(value)}"
+                                      for key, value in updates.items())
+            await update.message.reply_text(
+                f"✅ Контакт **{contact['name']}** обновлён.\n"
+                f"Изменения: {fields_pretty}",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка при обновлении: {str(e)}")
     
     # === Вспомогательные методы ===
     
@@ -283,6 +433,35 @@ class ContactHandlers:
                 return None
         
         return None
+    
+    def _parse_update_fields(self, args: list) -> dict:
+        """Разобрать список аргументов вида поле=значение"""
+        updates = {}
+        allowed_fields = {'name', 'company', 'position', 'email', 'telegram', 'phone', 'tags', 'bio'}
+        
+        arg_string = ' '.join(args)
+        try:
+            tokens = shlex.split(arg_string)
+        except ValueError:
+            return {}
+        
+        for token in tokens:
+            if '=' not in token:
+                continue
+            field, value = token.split('=', 1)
+            field = field.strip().lower()
+            value = value.strip()
+            
+            if field not in allowed_fields or not value:
+                continue
+            
+            if field == 'tags':
+                tags = [tag.strip() for tag in value.split(',') if tag.strip()]
+                updates[field] = tags
+            else:
+                updates[field] = value
+        
+        return updates
 
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка загрузки файлов с контактами"""

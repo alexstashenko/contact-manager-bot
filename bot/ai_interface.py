@@ -65,7 +65,7 @@ class AIInterface:
         """Получить контакты с последними взаимодействиями"""
         try:
             # Используем представление contact_summary для оптимизации
-            response = self.supabase.table('contact_summary').select('*').execute()
+            response = self.supabase.table('contact_summary').select('*').limit(200).execute()
             return response.data
         except Exception as e:
             print(f"Ошибка получения данных: {e}")
@@ -99,6 +99,9 @@ class AIInterface:
             
             if tags:
                 line += f" [Теги: {tags}]"
+            if contact.get('bio'):
+                short_bio = contact['bio'] if len(contact['bio']) <= 120 else contact['bio'][:117] + '...'
+                line += f" | Описание: {short_bio}"
             
             # Добавить информацию о последнем взаимодействии
             if contact.get('last_interaction_date'):

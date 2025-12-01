@@ -56,6 +56,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /quick - Быстрое добавление одной строкой
 /add - Интерактивное добавление
 
+✏️ **Редактирование и описание:**
+/edit - Обновить поля контакта
+/profile @username - Подтянуть имя и описание из Telegram профиля
+
 💬 **Заметки:**
 /note - Добавить заметку к контакту
 
@@ -187,20 +191,22 @@ def main():
     # Регистрация обработчиков команд
     
     # --- БЛОКИРОВКА ДОСТУПА ДЛЯ ПОСТОРОННИХ ---
-    ADMIN_ID = 1031225569
-    
-    async def unauthorized_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик для неавторизованных пользователей"""
-        await update.message.reply_text(
-            "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
-        )
-
-    # Этот хендлер должен быть ПЕРВЫМ. 
-    # ~filters.User(user_id=ADMIN_ID) означает "все пользователи КРОМЕ админа"
-    # block=False не ставим, чтобы он прерывал цепочку (по умолчанию в PTB один хендлер срабатывает)
-    # Но постойте, в PTB по умолчанию срабатывает первый подходящий хендлер в группе.
-    # Если мы добавим его первым, он перехватит всё для чужаков.
-    application.add_handler(MessageHandler(~filters.User(user_id=ADMIN_ID), unauthorized_handler), group=0)
+    admin_ids_env = os.getenv('ADMIN_IDS') or os.getenv('ADMIN_ID')
+    admin_ids = []
+    if admin_ids_env:
+        for value in admin_ids_env.split(','):
+            value = value.strip()
+            if value.isdigit():
+                admin_ids.append(int(value))
+    if not admin_ids:
+        logger.warning("ADMIN_IDS не заданы. Бот будет доступен всем пользователям.")
+    else:
+        async def unauthorized_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            """Обработчик для неавторизованных пользователей"""
+            await update.message.reply_text(
+                "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
+            )
+        application.add_handler(MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler), group=0)
     # -------------------------------------------
 
     application.add_handler(CommandHandler("start", start_command))
@@ -214,6 +220,8 @@ def main():
     application.add_handler(CommandHandler("note", contact_handlers.add_note))
     application.add_handler(CommandHandler("find", contact_handlers.find_contact))
     application.add_handler(CommandHandler("list", contact_handlers.list_recent_contacts))
+    application.add_handler(CommandHandler("profile", contact_handlers.import_profile))
+    application.add_handler(CommandHandler("edit", contact_handlers.edit_contact))
     
     # Обработчик файлов (импорт контактов)
     application.add_handler(MessageHandler(filters.Document.ALL, contact_handlers.handle_document))

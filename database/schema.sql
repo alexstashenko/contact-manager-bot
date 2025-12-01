@@ -10,6 +10,8 @@ CREATE TABLE contacts (
     company TEXT,
     position TEXT,
     tags JSONB DEFAULT '[]'::jsonb,
+    bio TEXT,
+    bio_source TEXT,
     
     -- Контактная информация
     telegram TEXT,
@@ -86,6 +88,7 @@ SELECT
     c.company,
     c.position,
     c.tags,
+    c.bio,
     c.telegram,
     c.email,
     c.phone,
