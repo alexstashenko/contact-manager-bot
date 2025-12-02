@@ -31,7 +31,7 @@ class AIInterface:
         
         Returns:
             {
-                'type': 'name_search' | 'company_search' | 'tag_search' | 'complex',
+                'type': 'name_search' | 'company_search' | 'tag_search' | 'position_search' | 'complex',
                 'filter': extracted search term or None
             }
         """
@@ -39,20 +39,9 @@ class AIInterface:
         
         query_lower = query.lower().strip()
         
-        # Простой поиск по имени
-        name_patterns = [
-            r'^(?:покажи|выведи|открой|найди|кто такой|кто такая)\s+(.+)$',
-            r'^@?([a-zA-Zа-яА-ЯёЁ\s]+)$',  # Просто имя без глаголов
-        ]
-        
-        for pattern in name_patterns:
-            match = re.match(pattern, query_lower)
-            if match:
-                return {'type': 'name_search', 'filter': match.group(1).strip()}
-        
-        # Поиск по компании
+        # Поиск по компании (проверяем первым, чтобы не перепутать с именем)
         company_patterns = [
-            r'(?:кто|все|контакты)\s+(?:из|в)\s+(.+)',
+            r'(?:кто|все|контакты)?\s*(?:из|в)\s+(.+)',
             r'(.+)\s+компания',
         ]
         
@@ -61,9 +50,19 @@ class AIInterface:
             if match:
                 return {'type': 'company_search', 'filter': match.group(1).strip()}
         
+        # Поиск по должности (новое!)
+        position_patterns = [
+            r'(?:найди|покажи|кто|все|мне нужны?)\s+(?:все|всех)?\s*(\w+(?:ов|щиков|еров|овщиков|истов|ов))',  # тестировщиков, разработчиков
+            r'(?:найди|покажи|кто)\s+.*?(тестировщик|разработчик|менеджер|дизайнер|hr|маркетолог)',
+        ]
+        
+        for pattern in position_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                return {'type': 'position_search', 'filter': match.group(1).strip()}
+        
         # Поиск по тегу
         tag_patterns = [
-            r'(?:все|кто)\s+(hr|разработчик|менеджер|дизайнер|маркетолог)',
             r'#(\w+)',
         ]
         
@@ -71,6 +70,17 @@ class AIInterface:
             match = re.search(pattern, query_lower)
             if match:
                 return {'type': 'tag_search', 'filter': match.group(1).strip()}
+        
+        # Простой поиск по имени (проверяем после остальных)
+        name_patterns = [
+            r'^(?:покажи|выведи|открой)\s+([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)\s*$',  # Только с заглавной
+            r'^([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)\s*$',  # Просто имя с заглавной
+        ]
+        
+        for pattern in name_patterns:
+            match = re.match(pattern, query_lower.title())  # Приводим к title case для проверки
+            if match:
+                return {'type': 'name_search', 'filter': match.group(1).strip()}
         
         # Сложный запрос (требует анализа всех контактов)
         return {'type': 'complex', 'filter': None}
@@ -133,8 +143,8 @@ class AIInterface:
         Получить контакты с умной фильтрацией на уровне SQL.
         
         Args:
-            query_type: Тип запроса ('name_search', 'company_search', 'tag_search', 'complex')
-            filter_value: Значение для фильтрации (имя, компания, тег)
+            query_type: Тип запроса ('name_search', 'company_search', 'tag_search', 'position_search', 'complex')
+            filter_value: Значение для фильтрации (имя, компания, тег, должность)
         
         Returns:
             Отфильтрованный список контактов
@@ -157,6 +167,17 @@ class AIInterface:
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .ilike('company', f'%{filter_value}%')
+                    .limit(100)
+                    .execute()
+                )
+                return response.data
+            
+            elif query_type == 'position_search' and filter_value:
+                # Поиск по должности
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .ilike('position', f'%{filter_value}%')
                     .limit(100)
                     .execute()
                 )
