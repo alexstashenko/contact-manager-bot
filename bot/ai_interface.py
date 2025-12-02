@@ -95,28 +95,28 @@ class AIInterface:
         Returns:
             Форматированный ответ для отправки в Telegram
         """
-        
-        # Шаг 1: Анализ запроса
-        query_analysis = self._analyze_query(user_query)
-        
-        # Шаг 2: Получить контакты с учетом фильтрации
-        contacts_data = await self._fetch_filtered_contacts(
-            query_type=query_analysis['type'],
-            filter_value=query_analysis['filter']
-        )
-        
-        if not contacts_data:
-            return "❌ Контакты не найдены. Попробуйте изменить запрос."
-        
-        total_found = len(contacts_data)
-        
-        # Шаг 3: Ограничить до 10 для показа, но AI знает сколько всего
-        display_contacts = contacts_data[:10]
-        context = self._prepare_context(display_contacts, max_contacts=10)
-        
-        # Шаг 4: Создать промпт
-        # AI теперь ТОЛЬКО форматирует результаты, НЕ ищет
-        prompt = f"""У пользователя {total_found} контакт(ов), подходящих под запрос "{user_query}".
+        try:
+            # Шаг 1: Анализ запроса
+            query_analysis = self._analyze_query(user_query)
+            
+            # Шаг 2: Получить контакты с учетом фильтрации
+            contacts_data = await self._fetch_filtered_contacts(
+                query_type=query_analysis['type'],
+                filter_value=query_analysis['filter']
+            )
+            
+            if not contacts_data:
+                return "❌ Контакты не найдены. Попробуйте изменить запрос."
+            
+            total_found = len(contacts_data)
+            
+            # Шаг 3: Ограничить до 10 для показа, но AI знает сколько всего
+            display_contacts = contacts_data[:10]
+            context = self._prepare_context(display_contacts, max_contacts=10)
+            
+            # Шаг 4: Создать промпт
+            # AI теперь ТОЛЬКО форматирует результаты, НЕ ищет
+            prompt = f"""У пользователя {total_found} контакт(ов), подходящих под запрос "{user_query}".
 
 Вот первые {len(display_contacts)} из них:
 
@@ -135,11 +135,13 @@ class AIInterface:
 
 Отвечай по-русски, кратко и структурированно."""
 
-        # Шаг 5: Получить ответ от Gemini
-        try:
+            # Шаг 5: Получить ответ от Gemini
             response = await asyncio.to_thread(self.model.generate_content, prompt)
             return self._format_response(response.text)
+            
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"❌ Ошибка при обработке запроса: {str(e)}"
     
     async def _fetch_filtered_contacts(self, query_type: str, filter_value) -> list:
