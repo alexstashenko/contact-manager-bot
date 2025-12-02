@@ -29,50 +29,61 @@ class AIInterface:
         """
         Анализ запроса для определения типа фильтрации.
         
-        Стратегия: Фильтруем только очевидные случаи (компания, должность).
-        Всё остальное передаём AI - он умнее и лучше поймёт контекст.
+        Новая стратегия для 7000+ контактов:
+        - Извлекаем ключевые слова из запроса
+        - SQL фильтрует все подходящие контакты (не ограничиваем!)
+        - AI только красиво форматирует результаты
         
         Returns:
             {
-                'type': 'company_search' | 'position_search' | 'ai_search',
-                'filter': extracted search term or None
+                'type': 'name_search' | 'company_search' | 'position_search' | 'general',
+                'filter': search terms (string or list)
             }
         """
         import re
         
         query_lower = query.lower().strip()
+        original_query = query.strip()
         
         # Поиск по компании (явные маркеры)
         company_patterns = [
-            r'(?:из|в)\s+([А-ЯЁа-яё\w\s]+)',  # "из Google", "в Яндекс"
+            r'(?:из|в)\s+([А-ЯЁа-яё\w\s]+)',
             r'([А-ЯЁа-яё\w]+)\s+компания',
         ]
         
         for pattern in company_patterns:
-            match = re.search(pattern, query)
+            match = re.search(pattern, original_query)
             if match:
                 return {'type': 'company_search', 'filter': match.group(1).strip()}
         
         # Поиск по должности (ключевые слова)
-        position_patterns = [
-            r'\b(тестировщик\w*)\b',
-            r'\b(разработчик\w*)\b',
-            r'\b(менеджер\w*)\b',
-            r'\b(дизайнер\w*)\b',
-            r'\b(маркетолог\w*)\b',
-            r'\bhr\b',
-        ]
+        position_keywords = ['тестировщик', 'разработчик', 'менеджер', 'дизайнер', 'маркетолог', 'hr']
+        for keyword in position_keywords:
+            if keyword in query_lower:
+                # Убираем окончания
+                base = re.sub(r'(ов|ам|ами|ах|а|у|ом|е|и)$', '', keyword)
+                return {'type': 'position_search', 'filter': base}
         
-        for pattern in position_patterns:
-            match = re.search(pattern, query_lower)
-            if match:
-                # Убираем окончания для поиска
-                position = match.group(1) if match.lastindex else 'hr'
-                base_position = re.sub(r'(ов|ам|ами|ах|а|у|ом|е|и)$', '', position)
-                return {'type': 'position_search', 'filter': base_position}
+        # Извлечение имён/слов для поиска
+        # Убираем стоп-слова и извлекаем значимые слова
+        stop_words = {'найди', 'найд', 'покажи', 'покаж', 'кто', 'мне', 'нужен', 'нужна', 'нужны', 
+                      'все', 'всех', 'человек', 'людей', 'контакт', 'контакты', 'есть', 'у', 'меня',
+                      'из', 'в', 'с', 'на', 'по', 'для', 'или', 'и', 'а', 'но'}
         
-        # Всё остальное - пусть AI сам разбирается (имена, сложные запросы, и т.д.)
-        return {'type': 'ai_search', 'filter': None}
+        # Разбиваем на слова и фильтруем
+        words = re.findall(r'[А-ЯЁа-яёA-Za-z]+', original_query)
+        search_terms = [w for w in words if w.lower() not in stop_words and len(w) > 1]
+        
+        if search_terms:
+            # Если есть слова с заглавной буквы - скорее всего имена
+            capitalized = [w for w in search_terms if w[0].isupper()]
+            if capitalized:
+                return {'type': 'name_search', 'filter': capitalized}
+            # Иначе ищем по всем словам
+            return {'type': 'name_search', 'filter': search_terms}
+        
+        # Если ничего не нашли - общий поиск
+        return {'type': 'general', 'filter': query}
     
     async def process_query(self, user_query: str) -> str:
         """
@@ -97,30 +108,30 @@ class AIInterface:
         if not contacts_data:
             return "❌ Контакты не найдены. Попробуйте изменить запрос."
         
-        # Шаг 3: Подготовить контекст для Gemini
-        # Для специфичных запросов (компания, должность) - все найденные
-        # Для AI search - передаём до 100 контактов для анализа
-        if query_analysis['type'] in ['company_search', 'position_search']:
-            max_contacts = len(contacts_data)
-        else:
-            max_contacts = min(100, len(contacts_data))
+        total_found = len(contacts_data)
         
-        context = self._prepare_context(contacts_data, max_contacts=max_contacts)
+        # Шаг 3: Ограничить до 10 для показа, но AI знает сколько всего
+        display_contacts = contacts_data[:10]
+        context = self._prepare_context(display_contacts, max_contacts=10)
         
         # Шаг 4: Создать промпт
-        prompt = f"""Ты — помощник для управления контактами. У пользователя есть следующие контакты:
+        # AI теперь ТОЛЬКО форматирует результаты, НЕ ищет
+        prompt = f"""У пользователя {total_found} контакт(ов), подходящих под запрос "{user_query}".
+
+Вот первые {len(display_contacts)} из них:
 
 {context}
 
-Вопрос пользователя: {user_query}
+ЗАДАЧА: Красиво отформатируй эти контакты для пользователя.
 
-ВАЖНО: Если пользователь просто написал имя или имя и фамилию (например: "Иван", "Иван Петров") или использовал глаголы "покажи", "выведи", "открой", "найди" с именем — это значит, что нужно показать ПОЛНУЮ карточку контакта со ВСЕМИ доступными данными.
-
-Для каждого контакта указывай:
+Для каждого контакта покажи:
 - Имя
 - Компания и должность (если есть)
-- ВСЕ контактные данные (Email, Telegram, Телефон - показывай все, что есть)
+- Контактные данные (Email, Telegram, Телефон)
 - Последнее взаимодействие (если есть)
+
+В КОНЦЕ обязательно добавь:
+{"- Найдено еще " + str(total_found - 10) + " контакт(ов)" if total_found > 10 else ""}
 
 Отвечай по-русски, кратко и структурированно."""
 
@@ -131,50 +142,69 @@ class AIInterface:
         except Exception as e:
             return f"❌ Ошибка при обработке запроса: {str(e)}"
     
-    async def _fetch_filtered_contacts(self, query_type: str, filter_value: str = None) -> list:
+    async def _fetch_filtered_contacts(self, query_type: str, filter_value) -> list:
         """
-        Получить контакты с умной фильтрацией на уровне SQL.
+        Получить контакты с SQL фильтрацией.
+        
+        Новый подход: SQL находит ВСЕ подходящие контакты (без лимитов),
+        AI потом отформатирует топ-10 и скажет "найдено еще N"
         
         Args:
-            query_type: Тип запроса ('company_search', 'position_search', 'ai_search')
-            filter_value: Значение для фильтрации (компания, должность)
+            query_type: 'name_search' | 'company_search' | 'position_search' | 'general'
+            filter_value: строка или список строк для поиска
         
         Returns:
-            Отфильтрованный список контактов
+            Список ВСЕХ найденных контактов
         """
         try:
-            if query_type == 'company_search' and filter_value:
-                # Поиск по компании
+            if query_type == 'name_search' and filter_value:
+                # Поиск по нескольким словам (имя, фамилия, отчество)
+                search_terms = filter_value if isinstance(filter_value, list) else [filter_value]
+                
+                # Строим OR условия для каждого слова
+                conditions = []
+                for term in search_terms:
+                    term_lower = term.lower()
+                    conditions.append(f"name.ilike.%{term_lower}%")
+                
+                or_condition = ",".join(conditions)
+                
+                response = await self._run_io(
+                    lambda: self.supabase.table('contact_summary')
+                    .select('*')
+                    .or_(or_condition)
+                    .order('created_at', desc=True)
+                    .execute()  # БЕЗ ЛИМИТА - находим всех!
+                )
+                return response.data
+            
+            elif query_type == 'company_search' and filter_value:
                 response = await self._run_io(
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .ilike('company', f'%{filter_value}%')
                     .order('created_at', desc=True)
-                    .limit(100)
                     .execute()
                 )
                 return response.data
             
             elif query_type == 'position_search' and filter_value:
-                # Поиск по должности
                 response = await self._run_io(
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .ilike('position', f'%{filter_value}%')
                     .order('created_at', desc=True)
-                    .limit(100)
                     .execute()
                 )
                 return response.data
             
             else:
-                # AI Search - возвращаем все контакты (или топ-200 для production)
-                # AI сам разберётся что искать: имя, фамилию, заметки, всё что угодно
+                # General search - топ-100 последних
                 response = await self._run_io(
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .order('created_at', desc=True)
-                    .limit(200)  # Увеличили лимит для лучшего контекста
+                    .limit(100)
                     .execute()
                 )
                 return response.data
