@@ -52,14 +52,22 @@ class AIInterface:
         
         # Поиск по должности (новое!)
         position_patterns = [
-            r'(?:найди|покажи|кто|все|мне нужны?)\s+(?:все|всех)?\s*(\w+(?:ов|щиков|еров|овщиков|истов|ов))',  # тестировщиков, разработчиков
-            r'(?:найди|покажи|кто)\s+.*?(тестировщик|разработчик|менеджер|дизайнер|hr|маркетолог)',
+            r'\b(тестировщик\w*)\b',  # тестировщик, тестировщиков, тестировщика
+            r'\b(разработчик\w*)\b',  # разработчик, разработчиков, разработчика
+            r'\b(менеджер\w*)\b',
+            r'\b(дизайнер\w*)\b',
+            r'\b(маркетолог\w*)\b',
+            r'\bhr\b',
         ]
         
         for pattern in position_patterns:
             match = re.search(pattern, query_lower)
             if match:
-                return {'type': 'position_search', 'filter': match.group(1).strip()}
+                # Извлекаем базовую форму должности
+                position = match.group(1) if match.lastindex else 'hr'
+                # Убираем окончания для поиска
+                base_position = re.sub(r'(ов|ам|ами|ах|а|у|ом|е|и)$', '', position)
+                return {'type': 'position_search', 'filter': base_position}
         
         # Поиск по тегу
         tag_patterns = [
