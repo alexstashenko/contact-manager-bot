@@ -220,19 +220,26 @@ def main():
             value = value.strip()
             if value.isdigit():
                 admin_ids.append(int(value))
+    
     if not admin_ids:
-        logger.warning("ADMIN_IDS не заданы. Бот будет доступен всем пользователям.")
-    else:
-        async def unauthorized_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            """Обработчик для неавторизованных пользователей"""
-            await update.message.reply_text(
-                "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
-            )
-        application.add_handler(
-            MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler),
-            group=0,
-            block=True
+        raise ValueError(
+            "ADMIN_IDS must be set in environment variables for security!\n"
+            "Get your Telegram ID from @userinfobot and set ADMIN_IDS=your_id"
         )
+    
+    logger.info(f"Bot access restricted to {len(admin_ids)} admin(s)")
+    
+    async def unauthorized_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик для неавторизованных пользователей"""
+        await update.message.reply_text(
+            "⛔️ Если вам нужен такой бот, обратитесь к @alexander_stashenko"
+        )
+    
+    application.add_handler(
+        MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler),
+        group=0,
+        block=True
+    )
     # -------------------------------------------
 
     application.add_handler(CommandHandler("start", start_command))
