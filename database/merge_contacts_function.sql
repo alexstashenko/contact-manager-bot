@@ -41,14 +41,8 @@ BEGIN
     IF master_contact.phone IS NOT NULL THEN
         all_phones := array_append(all_phones, master_contact.phone);
     END IF;
-    IF master_contact.phone2 IS NOT NULL THEN
-        all_phones := array_append(all_phones, master_contact.phone2);
-    END IF;
     IF master_contact.email IS NOT NULL THEN
         all_emails := array_append(all_emails, master_contact.email);
-    END IF;
-    IF master_contact.email2 IS NOT NULL THEN
-        all_emails := array_append(all_emails, master_contact.email2);
     END IF;
     IF master_contact.tags IS NOT NULL THEN
         all_tags := master_contact.tags;
@@ -67,14 +61,8 @@ BEGIN
         IF duplicate_contact.phone IS NOT NULL AND NOT (duplicate_contact.phone = ANY(all_phones)) THEN
             all_phones := array_append(all_phones, duplicate_contact.phone);
         END IF;
-        IF duplicate_contact.phone2 IS NOT NULL AND NOT (duplicate_contact.phone2 = ANY(all_phones)) THEN
-            all_phones := array_append(all_phones, duplicate_contact.phone2);
-        END IF;
         IF duplicate_contact.email IS NOT NULL AND NOT (duplicate_contact.email = ANY(all_emails)) THEN
             all_emails := array_append(all_emails, duplicate_contact.email);
-        END IF;
-        IF duplicate_contact.email2 IS NOT NULL AND NOT (duplicate_contact.email2 = ANY(all_emails)) THEN
-            all_emails := array_append(all_emails, duplicate_contact.email2);
         END IF;
         
         -- Объединяем теги
@@ -108,9 +96,7 @@ BEGIN
     -- Обновляем master контакт со всеми собранными данными
     UPDATE contacts SET
         phone = CASE WHEN array_length(all_phones, 1) >= 1 THEN all_phones[1] ELSE phone END,
-        phone2 = CASE WHEN array_length(all_phones, 1) >= 2 THEN all_phones[2] ELSE NULL END,
         email = CASE WHEN array_length(all_emails, 1) >= 1 THEN all_emails[1] ELSE email END,
-        email2 = CASE WHEN array_length(all_emails, 1) >= 2 THEN all_emails[2] ELSE NULL END,
         tags = all_tags,
         company = master_contact.company,
         position = master_contact.position,

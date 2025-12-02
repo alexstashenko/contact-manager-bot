@@ -24,16 +24,12 @@ def parse_vcard(content: str) -> List[Dict[str, Any]]:
             emails = [e.value for e in vcard.email_list]
             if emails:
                 contact['email'] = emails[0]
-            if len(emails) > 1:
-                contact['email2'] = emails[1]
                 
         # Phone
         if hasattr(vcard, 'tel'):
             phones = [t.value for t in vcard.tel_list]
             if phones:
                 contact['phone'] = phones[0]
-            if len(phones) > 1:
-                contact['phone2'] = phones[1]
         
         # Organization
         if hasattr(vcard, 'org'):
@@ -92,10 +88,10 @@ def parse_csv(content: Union[str, bytes, io.StringIO, io.BytesIO]) -> List[Dict[
             'company': row.get('company'),
             'position': row.get('position'),
             'email': row.get('email'),
-            'email2': row.get('email2'),
+
             'telegram': row.get('telegram'),
             'phone': row.get('phone'),
-            'phone2': row.get('phone2'),
+
             'source': 'import_csv'
         }
         

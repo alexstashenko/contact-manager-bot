@@ -90,12 +90,7 @@ class ContactHandlers:
             )
             return
         
-        if contact_data.get('email2') and not self._validate_email(contact_data['email2']):
-            await update.message.reply_text(
-                f"❌ Некорректный второй email: `{self._md_escape(contact_data['email2'])}`",
-                parse_mode='Markdown'
-            )
-            return
+
         
         # Валидация telegram
         if contact_data.get('telegram') and not self._validate_telegram(contact_data['telegram']):
@@ -430,12 +425,7 @@ class ContactHandlers:
             )
             return
         
-        if 'email2' in updates and updates['email2'] and not self._validate_email(updates['email2']):
-            await update.message.reply_text(
-                f"❌ Некорректный второй email: `{self._md_escape(updates['email2'])}`",
-                parse_mode='Markdown'
-            )
-            return
+
         
         # Валидация telegram
         if 'telegram' in updates and updates['telegram'] and not self._validate_telegram(updates['telegram']):
@@ -606,7 +596,7 @@ class ContactHandlers:
                 # Удаляем кавычки если есть
                 value = value.strip('"').strip("'")
                 
-                if key in ['company', 'position', 'email', 'email2', 'telegram', 'phone', 'phone2', 'bio', 'name']: # Added 'name'
+                if key in ['company', 'position', 'email', 'telegram', 'phone', 'bio', 'name']:
                     updates[key] = value
                 elif key == 'tags':
                     updates['tags'] = [t.strip() for t in value.split(',') if t.strip()] # Added if t.strip() to avoid empty tags

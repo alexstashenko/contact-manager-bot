@@ -91,9 +91,7 @@ SELECT
     c.bio,
     c.telegram,
     c.email,
-    c.email2,
     c.phone,
-    c.phone2,
     COUNT(i.id) as total_interactions,
     MAX(i.date) as last_interaction_date,
     c.created_at

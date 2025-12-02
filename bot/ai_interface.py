@@ -242,12 +242,10 @@ class AIInterface:
                 contact_info.append(f"TG: {contact['telegram']}")
             if contact.get('email'):
                 contact_info.append(f"Email: {contact['email']}")
-            if contact.get('email2'):
-                contact_info.append(f"Email2: {contact['email2']}")
+
             if contact.get('phone'):
                 contact_info.append(f"Тел: {contact['phone']}")
-            if contact.get('phone2'):
-                contact_info.append(f"Тел2: {contact['phone2']}")
+
             
             if contact_info:
                 line += f" | {', '.join(contact_info)}"
