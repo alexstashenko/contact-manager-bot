@@ -237,8 +237,7 @@ def main():
     
     application.add_handler(
         MessageHandler(~filters.User(user_id=admin_ids), unauthorized_handler),
-        group=0,
-        block=True
+        group=0
     )
     # -------------------------------------------
 
