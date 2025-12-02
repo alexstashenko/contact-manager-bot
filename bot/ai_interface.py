@@ -29,9 +29,12 @@ class AIInterface:
         """
         Анализ запроса для определения типа фильтрации.
         
+        Стратегия: Фильтруем только очевидные случаи (компания, должность).
+        Всё остальное передаём AI - он умнее и лучше поймёт контекст.
+        
         Returns:
             {
-                'type': 'name_search' | 'company_search' | 'tag_search' | 'position_search' | 'complex',
+                'type': 'company_search' | 'position_search' | 'ai_search',
                 'filter': extracted search term or None
             }
         """
@@ -39,21 +42,21 @@ class AIInterface:
         
         query_lower = query.lower().strip()
         
-        # Поиск по компании (проверяем первым, чтобы не перепутать с именем)
+        # Поиск по компании (явные маркеры)
         company_patterns = [
-            r'(?:кто|все|контакты)?\s*(?:из|в)\s+(.+)',
-            r'(.+)\s+компания',
+            r'(?:из|в)\s+([А-ЯЁа-яё\w\s]+)',  # "из Google", "в Яндекс"
+            r'([А-ЯЁа-яё\w]+)\s+компания',
         ]
         
         for pattern in company_patterns:
-            match = re.search(pattern, query_lower)
+            match = re.search(pattern, query)
             if match:
                 return {'type': 'company_search', 'filter': match.group(1).strip()}
         
-        # Поиск по должности (новое!)
+        # Поиск по должности (ключевые слова)
         position_patterns = [
-            r'\b(тестировщик\w*)\b',  # тестировщик, тестировщиков, тестировщика
-            r'\b(разработчик\w*)\b',  # разработчик, разработчиков, разработчика
+            r'\b(тестировщик\w*)\b',
+            r'\b(разработчик\w*)\b',
             r'\b(менеджер\w*)\b',
             r'\b(дизайнер\w*)\b',
             r'\b(маркетолог\w*)\b',
@@ -63,35 +66,13 @@ class AIInterface:
         for pattern in position_patterns:
             match = re.search(pattern, query_lower)
             if match:
-                # Извлекаем базовую форму должности
-                position = match.group(1) if match.lastindex else 'hr'
                 # Убираем окончания для поиска
+                position = match.group(1) if match.lastindex else 'hr'
                 base_position = re.sub(r'(ов|ам|ами|ах|а|у|ом|е|и)$', '', position)
                 return {'type': 'position_search', 'filter': base_position}
         
-        # Поиск по тегу
-        tag_patterns = [
-            r'#(\w+)',
-        ]
-        
-        for pattern in tag_patterns:
-            match = re.search(pattern, query_lower)
-            if match:
-                return {'type': 'tag_search', 'filter': match.group(1).strip()}
-        
-        # Простой поиск по имени (проверяем после остальных)
-        name_patterns = [
-            r'^(?:покажи|выведи|открой)\s+([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)\s*$',  # Только с заглавной
-            r'^([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)\s*$',  # Просто имя с заглавной
-        ]
-        
-        for pattern in name_patterns:
-            match = re.match(pattern, query_lower.title())  # Приводим к title case для проверки
-            if match:
-                return {'type': 'name_search', 'filter': match.group(1).strip()}
-        
-        # Сложный запрос (требует анализа всех контактов)
-        return {'type': 'complex', 'filter': None}
+        # Всё остальное - пусть AI сам разбирается (имена, сложные запросы, и т.д.)
+        return {'type': 'ai_search', 'filter': None}
     
     async def process_query(self, user_query: str) -> str:
         """
@@ -117,10 +98,14 @@ class AIInterface:
             return "❌ Контакты не найдены. Попробуйте изменить запрос."
         
         # Шаг 3: Подготовить контекст для Gemini
-        # Для простых запросов отправляем все найденные (обычно 1-20)
-        # Для сложных - ограничиваем до 30
-        max_contacts = 30 if query_analysis['type'] == 'complex' else len(contacts_data)
-        context = self._prepare_context(contacts_data, max_contacts=min(max_contacts, len(contacts_data)))
+        # Для специфичных запросов (компания, должность) - все найденные
+        # Для AI search - передаём до 100 контактов для анализа
+        if query_analysis['type'] in ['company_search', 'position_search']:
+            max_contacts = len(contacts_data)
+        else:
+            max_contacts = min(100, len(contacts_data))
+        
+        context = self._prepare_context(contacts_data, max_contacts=max_contacts)
         
         # Шаг 4: Создать промпт
         prompt = f"""Ты — помощник для управления контактами. У пользователя есть следующие контакты:
@@ -151,30 +136,20 @@ class AIInterface:
         Получить контакты с умной фильтрацией на уровне SQL.
         
         Args:
-            query_type: Тип запроса ('name_search', 'company_search', 'tag_search', 'position_search', 'complex')
-            filter_value: Значение для фильтрации (имя, компания, тег, должность)
+            query_type: Тип запроса ('company_search', 'position_search', 'ai_search')
+            filter_value: Значение для фильтрации (компания, должность)
         
         Returns:
             Отфильтрованный список контактов
         """
         try:
-            if query_type == 'name_search' and filter_value:
-                # Поиск по имени (case-insensitive)
-                response = await self._run_io(
-                    lambda: self.supabase.table('contact_summary')
-                    .select('*')
-                    .ilike('name', f'%{filter_value}%')
-                    .limit(50)
-                    .execute()
-                )
-                return response.data
-            
-            elif query_type == 'company_search' and filter_value:
+            if query_type == 'company_search' and filter_value:
                 # Поиск по компании
                 response = await self._run_io(
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .ilike('company', f'%{filter_value}%')
+                    .order('created_at', desc=True)
                     .limit(100)
                     .execute()
                 )
@@ -186,29 +161,20 @@ class AIInterface:
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .ilike('position', f'%{filter_value}%')
-                    .limit(100)
-                    .execute()
-                )
-                return response.data
-            
-            elif query_type == 'tag_search' and filter_value:
-                # Поиск по тегу (используем contains для JSONB)
-                response = await self._run_io(
-                    lambda: self.supabase.table('contact_summary')
-                    .select('*')
-                    .contains('tags', [filter_value])
+                    .order('created_at', desc=True)
                     .limit(100)
                     .execute()
                 )
                 return response.data
             
             else:
-                # Сложный запрос - возвращаем топ-30 по дате обновления
+                # AI Search - возвращаем все контакты (или топ-200 для production)
+                # AI сам разберётся что искать: имя, фамилию, заметки, всё что угодно
                 response = await self._run_io(
                     lambda: self.supabase.table('contact_summary')
                     .select('*')
                     .order('created_at', desc=True)
-                    .limit(30)
+                    .limit(200)  # Увеличили лимит для лучшего контекста
                     .execute()
                 )
                 return response.data
