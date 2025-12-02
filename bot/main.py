@@ -183,12 +183,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Обработка как ИИ-запрос
     try:
         response = await ai_interface.process_query(user_message)
-        await update.message.reply_text(response, parse_mode='Markdown')
+        
+        # Если ответ содержит ошибку (начинается с ❌), отправляем без Markdown
+        if response.startswith("❌"):
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text(response, parse_mode='Markdown')
+            
     except Exception as e:
         logger.error(f"Ошибка обработки запроса: {e}")
-        await update.message.reply_text(
-            "❌ Произошла ошибка при обработке запроса. Попробуйте переформулировать вопрос."
-        )
+        # Отправляем текст ошибки пользователю для отладки
+        error_text = f"❌ Произошла ошибка: {str(e)}"
+        await update.message.reply_text(error_text)
 
 
 async def skip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
